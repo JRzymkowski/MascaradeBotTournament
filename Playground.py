@@ -65,7 +65,7 @@ def SinkhornKnoppBalance(squareMx, excludedRow, excludedColumn):
             if j != excludedColumn:
                 squareMx[:,j] = squareMx[:,j] / np.sum(squareMx[:,j])
                 error = error + (np.sum(squareMx[j,:]) -1) ** 2
-        #print('Iteration ', iteration, ', mean sqrd error = ', error)
+        #print('Iteration ', iteration, ', total sqrd error = ', error)
     return(squareMx)
 
 def UpdateBeliefsOnCharacterReveal(beliefs, numberOfRevealedPlayer, 
@@ -78,10 +78,25 @@ def UpdateBeliefsOnCharacterReveal(beliefs, numberOfRevealedPlayer,
     beliefsPosterior = SinkhornKnoppBalance(beliefsPosterior, numberOfRevealedPlayer,
                                    numberOfRevealedCharacter)
     return(beliefsPosterior)
-    
+
+def SwapCards(charactersInPlay, numberOfSwapperI, numberOfSwapperII):
+    temp = charactersInPlay[numberOfSwapperI]
+    charactersInPlay[numberOfSwapperI] = charactersInPlay[numberOfSwapperII]
+    charactersInPlay[numberOfSwapperII] = temp
+    return(charactersInPlay)
+
+# SwapCards(['a', 'b', 'c', 'd'], 0, 1)
+
+def UpdateBeliefsOnCardSwap(beliefs, numberOfSwapperI, numberOfSwapperII, 
+                            swapSubjectiveProbability):
+    beliefsPrior = 1*beliefs
+    beliefsPosterior = 1*beliefs  
+    beliefsPosterior[numberOfSwapperI,:] = beliefsPrior[numberOfSwapperI,:] * (1-swapSubjectiveProbability) + beliefsPrior[numberOfSwapperII,:] * swapSubjectiveProbability  
+    beliefsPosterior[numberOfSwapperII,:] = beliefsPrior[numberOfSwapperII,:] * (1-swapSubjectiveProbability) + beliefsPrior[numberOfSwapperI,:] * swapSubjectiveProbability              
+    return(beliefsPosterior)
 
 # actionModes = ('Regular', 'Swap only', 'Challenge the announcer')
-# actionTypes = ('Swap my card', 'Look at my card', 'Annunce my character')
+# actionTypes = ('Swap my card', 'Look at my card', 'Announce my character')
 
 players = np.array(('BotA', 'BotB', 'BotB', 'BotB'))
 
@@ -120,10 +135,12 @@ def MascaradeTournament(players, numberOfGames):
   if (numberOfPlayers < 6):
       players = np.append(players, ['Table'] * (6-numberOfPlayers))
       numberOfPlayers = 6
+  publicKnowledge = {}
+  publicKnowledge['numberOfActivePlayers'] = numberOfActivePlayers
   ## Every player starts with 6 coins
-  coinsOfPlayers = np.array([6] * numberOfActivePlayers)
-  coinsInBank = goldCoinsTotal - sum(coinsOfPlayers)
-  coinsInCourthouse = 0
+  publicKnowledge['coinsOfPlayers'] = np.array([6] * numberOfActivePlayers)
+  publicKnowledge['coinsInBank'] = goldCoinsTotal - sum(publicKnowledge['coinsOfPlayers'])
+  publicKnowledge['coinsInCourthouse'] = 0
   ## Choosing allowed character cards depending on the number of players
   charactersAllowedIndex = charactersAllowedArray[:,(numberOfActivePlayers-4)]
   charactersInPlay = characters[np.where(charactersAllowedIndex)]
@@ -132,44 +149,49 @@ def MascaradeTournament(players, numberOfGames):
   ## the true assignment of character cards at any moment
   charactersInPlay = np.array(random.sample(list(charactersInPlay), 
                                             numberOfPlayers))
-  startingAssignmentOfCharacters = np.copy(charactersInPlay)
-  revealedCharacters = np.array([True] * numberOfPlayers)
-  startingData = {'numberOfPlayers':numberOfPlayers,
-                  'startingAssignmentOfCharacters':startingAssignmentOfCharacters}
+  publicKnowledge['startingAssignmentOfCharacters'] = np.copy(charactersInPlay)
+  # At the beginning, character cards assignment is known to all players
+  publicKnowledge['revealedCharacters'] = np.array([True] * numberOfPlayers)
+  # The following public knowledge items are list updated on each event
+  publicKnowledge['announcedCharacters'] = []
+  publicKnowledge['challengesToAnnouncers'] = []
+  publicKnowledge['declaredCardSwaps'] = []
   # A prior beliefs array is an identity matrix
   # - we have full knowledge about who got which card
   beliefsPrior = np.identity(numberOfPlayers)
+  # Every player gets their own private beliefs array
   playersBeliefs = [beliefsPrior] * numberOfActivePlayers
+  performedCardSwaps = [[]] * numberOfActivePlayers
   numberOfTurnsForSwapOnly = 4 # according to the rules
   # Counters' initialization
   turnNumber = 0
   eventNumber = 0
   
   # Here an actual game starts
-  while all(coinsOfPlayers > 0) and all(coinsOfPlayers < 13):
+  while all(publicKnowledge['coinsOfPlayers'] > 0) and \
+        all(publicKnowledge['coinsOfPlayers'] < 13):
       
-      for currentPlayer in range(numberOfPlayers):
-          actionMode = 'Regular'
+      for currentPlayer in range(numberOfActivePlayers):
+          actionMode = 'Regular' # default
           turnNumber = turnNumber + 1
           eventNumber = eventNumber + 1
           
           # Restrictions on types of actions allowed:
           if turnNumber <= numberOfTurnsForSwapOnly:
               actionMode = 'Swap only'
-          if revealedCharacters[currentPlayer]:
+          if publicKnowledge['revealedCharacters'][currentPlayer]:
               actionMode = 'Swap only'
               
           # Current player makes a move
           playerMove = globals()[players[currentPlayer]](
-          startingData, currentPlayer, 
-          playersBeliefs[currentPlayer], 
-          publicGameHistory, privateGameHistory, actionMode)
+          currentPlayer, publicKnowledge,
+          playersBeliefs[currentPlayer], performedCardSwaps, actionMode)
           
           # If player decides to swap their card – or not (under the table):
           if playerMove['actionType'] == 'Swap my card':
               actionTarget = playerMove['actionArgument']
-              revealedCharacters[currentPlayer] = False
-              revealedCharacters[actionTarget] = False
+              publicKnowledge['revealedCharacters'][currentPlayer] = False
+              publicKnowledge['revealedCharacters'][actionTarget] = False
               if playerMove['actionTrue'] == True:
                   charactersInPlay = SwapCards(charactersInPlay,
                                                currentPlayer, actionTarget)
@@ -183,26 +205,12 @@ def MascaradeTournament(players, numberOfGames):
                                               startingAssignmentOfCharacters)
                               
           # If player decides to announce their character:
-          if playerMove['actionType'] == 'Annunce my character':
+          if playerMove['actionType'] == 'Announce my character':
               announcedCharacter = playerMove['actionArgument']
   #
   return(trueGameHistory)
   
-def SwapCards(charactersInPlay, numberOfSwapperI, numberOfSwapperII):
-    temp = charactersInPlay[numberOfSwapperI]
-    charactersInPlay[numberOfSwapperI] = charactersInPlay[numberOfSwapperII]
-    charactersInPlay[numberOfSwapperII] = temp
-    return(charactersInPlay)
 
-SwapCards(['a', 'b', 'c', 'd'], 0, 1)
-
-def UpdateBeliefsOnCardSwap(beliefs, numberOfSwapperI, numberOfSwapperII, 
-                            swapSubjectiveProbability):
-    beliefsPrior = 1*beliefs
-    beliefsPosterior = 1*beliefs  
-    beliefsPosterior[numberOfSwapperI,:] = beliefsPrior[numberOfSwapperI,:] * (1-swapSubjectiveProbability) + beliefsPrior[numberOfSwapperII,:] * swapSubjectiveProbability  
-    beliefsPosterior[numberOfSwapperII,:] = beliefsPrior[numberOfSwapperII,:] * (1-swapSubjectiveProbability) + beliefsPrior[numberOfSwapperI,:] * swapSubjectiveProbability              
-    return(beliefsPosterior)
 
 
 # Testing beliefs update function
@@ -234,39 +242,61 @@ for i in range(5):
 
     
 
-def BotA(startingData, myPlayerNumber, myBeliefs, 
-         publicGameHistory, privateGameHistory,
+def BotDraft(myPlayerNumber, publicKnowledge, myBeliefs, performedCardSwaps,
          actionMode):
-  numberOfPlayers = len(startingData('numberOfPlayers'))
+    """
+    actionModes = ('Regular', 'Swap only', 'Challenge the announcer')
+    actionTypes = ('Swap my card', 'Look at my card', 'Announce my character')
+    actionArgument = the number of player with whom to swap cards
+    or the name of character to announce
+    actionTrue = True or False (whether to actually swap the cards
+    or challenge the announcer)
+    """
+    if actionMode == 'Challenge the announcer':
+       # in this case, only the value of actionTrue is used
+       actionTrue = False
+       return {'myBeliefs':myBeliefs, 'actionTrue':actionTrue}
+    if actionMode == 'Swap only':
+       # in this case, only the values of actionArgument and actionTrue
+       # are used; actionArgument should be the number of player 
+       # with whom to swap cards;
+       # if not a number from available range (0 - (number of players-1)),
+       # will be ignored and environment will perform (or not) a swap
+       # with randomly chosen opponent
+       actionArgument = PlayerToMyRight(myPlayerNumber, 
+                                        publicKnowledge['numberOfActivePlayers'])
+       actionTrue = False
+       return {'myBeliefs':myBeliefs, 'actionArgument':actionArgument,
+               'actionTrue':actionTrue}
+    if actionMode == 'Regular':
+       
+       # If player decides to swap their card – or not (under the table):
+       actionType = 'Swap my card'
+       actionArgument = PlayerToMyLeft(myPlayerNumber, 
+                                        publicKnowledge['numberOfActivePlayers'])
+       actionTrue = False
+       return {'myBeliefs':myBeliefs, 'actionType':actionType,
+               'actionArgument':actionArgument, 'actionTrue':actionTrue}
+               
+       # If player decides to secretly look at their card:
+       actionType = 'Look at my card'
+       ## actionArgument and actionTrue are not used in this case
+       return {'myBeliefs':myBeliefs, 'actionType':actionType}
   
-  
-  return {'myBeliefs':myBeliefs, 'action':action,
-  'privateGameHistory':privateGameHistory }
-
-def UpdatePublicGameHistory(publicGameHistory, action):
+       # If player decides to announce their character:
+       actionType = 'Announce my character'
+       actionArgument = 'Judge'
+       ## if actionArgument is not one of the characters in play,
+       ## the tournament environment will choose one randomly
+       ## actionTrue is not used in this case
+       return {'myBeliefs':myBeliefs, 'actionType':actionType,
+               'actionArgument':actionArgument}
+    return {None}
+   
+def UpdatepublicKnowledge(publicKnowledge, action):
     #
-    return(publicGameHistory)
+    return(publicKnowledge)
 
 def UpdateTrueGameHistory(trueGameHistory, action):
     #
     return(trueGameHistory)
-
-
-
-PlayerToMyLeft(5, 6)
-
-for i in range(numberOfPlayers):
-    print(random.sample(range(numberOfCharacters), numberOfPlayers))
-
-
-coins[0] = coins[0] + 2
-np.where(coins == 8)
-
-n = np.array([[1,2],[5,6]]) 
-n[0,1]
-
-
-
-
-
-
