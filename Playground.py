@@ -160,21 +160,26 @@ def MascaradeTournament(players, numberOfGames):
   # - we have full knowledge about who got which card
   beliefsPrior = np.identity(numberOfPlayers)
   # Every player gets their own private beliefs array
-  playersBeliefs = [beliefsPrior] * numberOfActivePlayers
-  performedCardSwaps = [[]] * numberOfActivePlayers
+  playersBeliefs = [[beliefsPrior] for k in range(numberOfActivePlayers)]
+  privateKnowledge = [{'performedCardSwap':{'eventNumber':-1,
+                                            'numberOfSwapperI':None,
+                                            'numberOfSwapperII':None},
+                       'lookAtMyCard':{'eventNumber':-1,
+                                       'myCharacter':None}} \
+                       for k in range(numberOfActivePlayers)]
   numberOfTurnsForSwapOnly = 4 # according to the rules
   # Counters' initialization
   turnNumber = 0
   eventNumber = 0
-  
   # Here an actual game starts
   while all(publicKnowledge['coinsOfPlayers'] > 0) and \
         all(publicKnowledge['coinsOfPlayers'] < 13):
       
       for currentPlayer in range(numberOfActivePlayers):
-          actionMode = 'Regular' # default
+          
           turnNumber = turnNumber + 1
           eventNumber = eventNumber + 1
+          actionMode = 'Regular' # default
           
           # Restrictions on types of actions allowed:
           if turnNumber <= numberOfTurnsForSwapOnly:
@@ -184,20 +189,26 @@ def MascaradeTournament(players, numberOfGames):
               
           # Current player makes a move
           playerMove = globals()[players[currentPlayer]](
-          currentPlayer, publicKnowledge,
-          playersBeliefs[currentPlayer], performedCardSwaps, actionMode)
+          currentPlayer, publicKnowledge, privateKnowledge[currentPlayer],
+          playersBeliefs[currentPlayer], actionMode, eventNumber)
           
           # If player decides to swap their card – or not (under the table):
           if playerMove['actionType'] == 'Swap my card':
-              actionTarget = playerMove['actionArgument']
+              swapTarget = playerMove['actionArgument']
               publicKnowledge['revealedCharacters'][currentPlayer] = False
-              publicKnowledge['revealedCharacters'][actionTarget] = False
+              publicKnowledge['revealedCharacters'][swapTarget] = False
               if playerMove['actionTrue'] == True:
                   charactersInPlay = SwapCards(charactersInPlay,
-                                               currentPlayer, actionTarget)
-                  
+                                               currentPlayer, swapTarget)
+                  privateKnowledge[currentPlayer]['performedCardSwap'] = \
+                  {'eventNumber':eventNumber,
+                  'numberOfSwapperI':currentPlayer,
+                  'numberOfSwapperII':swapTarget}
           # If player decides to secretly look at their card:
           if playerMove['actionType'] == 'Look at my card':
+              privateKnowledge[currentPlayer]['lookAtMyCard'] = \
+                  {'eventNumber':eventNumber,
+                  'myCharacter':charactersInPlay[currentPlayer]}
               playersBeliefs[currentPlayer] = UpdateBeliefsOnCharacterReveal(
                                               playersBeliefs[currentPlayer],
                                               currentPlayer, 
@@ -242,8 +253,8 @@ for i in range(5):
 
     
 
-def BotDraft(myPlayerNumber, publicKnowledge, myBeliefs, performedCardSwaps,
-         actionMode):
+def BotDraft(myPlayerNumber, publicKnowledge, privateKnowledge, myBeliefs,
+         actionMode, eventNumber):
     """
     actionModes = ('Regular', 'Swap only', 'Challenge the announcer')
     actionTypes = ('Swap my card', 'Look at my card', 'Announce my character')
@@ -252,10 +263,23 @@ def BotDraft(myPlayerNumber, publicKnowledge, myBeliefs, performedCardSwaps,
     actionTrue = True or False (whether to actually swap the cards
     or challenge the announcer)
     """
+    # Updating beliefs
+    if privateKnowledge['lookAtMyCard']['eventNumber'] == (eventNumber - 1):
+        myRevealedCharacter = privateKnowledge['lookAtMyCard']['myCharacter']
+        myBeliefs = UpdateBeliefsOnCharacterReveal(myBeliefs, 
+                    myPlayerNumber, myRevealedCharacter, 
+                    publicKnowledge['startingAssignmentOfCharacters'])
+    if privateKnowledge['performedCardSwap']['eventNumber'] == (eventNumber - 1):
+        numberOfSwapperI = privateKnowledge['performedCardSwap']['numberOfSwapperI']
+        numberOfSwapperII = privateKnowledge['performedCardSwap']['numberOfSwapperII']
+        myBeliefs = UpdateBeliefsOnCardSwap(myBeliefs, 
+                    numberOfSwapperI, numberOfSwapperII, 1):
+    # Action
     if actionMode == 'Challenge the announcer':
        # in this case, only the value of actionTrue is used
        actionTrue = False
-       return {'myBeliefs':myBeliefs, 'actionTrue':actionTrue}
+       return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs,
+               'actionTrue':actionTrue}
     if actionMode == 'Swap only':
        # in this case, only the values of actionArgument and actionTrue
        # are used; actionArgument should be the number of player 
@@ -266,8 +290,8 @@ def BotDraft(myPlayerNumber, publicKnowledge, myBeliefs, performedCardSwaps,
        actionArgument = PlayerToMyRight(myPlayerNumber, 
                                         publicKnowledge['numberOfActivePlayers'])
        actionTrue = False
-       return {'myBeliefs':myBeliefs, 'actionArgument':actionArgument,
-               'actionTrue':actionTrue}
+       return {'privateKnowledge':privateKnowledge,'myBeliefs':myBeliefs,
+               'actionArgument':actionArgument, 'actionTrue':actionTrue}
     if actionMode == 'Regular':
        
        # If player decides to swap their card – or not (under the table):
@@ -275,13 +299,15 @@ def BotDraft(myPlayerNumber, publicKnowledge, myBeliefs, performedCardSwaps,
        actionArgument = PlayerToMyLeft(myPlayerNumber, 
                                         publicKnowledge['numberOfActivePlayers'])
        actionTrue = False
-       return {'myBeliefs':myBeliefs, 'actionType':actionType,
-               'actionArgument':actionArgument, 'actionTrue':actionTrue}
+       return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs,
+               'actionType':actionType, actionArgument':actionArgument, 
+               'actionTrue':actionTrue}
                
        # If player decides to secretly look at their card:
        actionType = 'Look at my card'
        ## actionArgument and actionTrue are not used in this case
-       return {'myBeliefs':myBeliefs, 'actionType':actionType}
+       return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs,
+               'actionType':actionType}
   
        # If player decides to announce their character:
        actionType = 'Announce my character'
@@ -289,8 +315,8 @@ def BotDraft(myPlayerNumber, publicKnowledge, myBeliefs, performedCardSwaps,
        ## if actionArgument is not one of the characters in play,
        ## the tournament environment will choose one randomly
        ## actionTrue is not used in this case
-       return {'myBeliefs':myBeliefs, 'actionType':actionType,
-               'actionArgument':actionArgument}
+       return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs, 
+               'actionType':actionType, 'actionArgument':actionArgument}
     return {None}
    
 def UpdatepublicKnowledge(publicKnowledge, action):
@@ -300,3 +326,17 @@ def UpdatepublicKnowledge(publicKnowledge, action):
 def UpdateTrueGameHistory(trueGameHistory, action):
     #
     return(trueGameHistory)
+    
+
+
+'''
+o I have a list of tuples such as this:
+
+[(1,"juca"),(22,"james"),(53,"xuxa"),(44,"delicia")]
+
+I want this list for a tuple whose number value is equal to something.
+
+So that if I do search(53) it will return the index value of 2
+
+[i for i, v in enumerate(L) if v[0] == 53]
+'''
