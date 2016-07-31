@@ -36,6 +36,8 @@ for educational purposes only.
 import numpy as np
 import random
 
+# Auxiliary functions
+
 def PlayerToMyLeft(myPlayerNumber, numberOfPlayers):
     return((myPlayerNumber+1) % numberOfPlayers)
     
@@ -65,7 +67,7 @@ def SinkhornKnoppBalance(squareMx, excludedRow, excludedColumn):
             if j != excludedColumn:
                 squareMx[:,j] = squareMx[:,j] / np.sum(squareMx[:,j])
                 error = error + (np.sum(squareMx[j,:]) -1) ** 2
-        #print('Iteration ', iteration, ', total sqrd error = ', error)
+        #print('Iteration ', iteration, ', total sqared error = ', error)
     return(squareMx)
 
 def UpdateBeliefsOnCharacterReveal(beliefs, numberOfRevealedPlayer, 
@@ -152,20 +154,22 @@ def MascaradeTournament(players, numberOfGames):
   publicKnowledge['startingAssignmentOfCharacters'] = np.copy(charactersInPlay)
   # At the beginning, character cards assignment is known to all players
   publicKnowledge['revealedCharacters'] = np.array([True] * numberOfPlayers)
-  # The following public knowledge items are list updated on each event
-  publicKnowledge['announcedCharacters'] = []
-  publicKnowledge['challengesToAnnouncers'] = []
-  publicKnowledge['declaredCardSwaps'] = []
+  publicKnowledge['lastAnnouncedCharacter'] = {'eventNumber':-1, 'character':None}
+  publicKnowledge['challengesToAnnouncer'] = np.array([False] * numberOfActivePlayers)
+  publicKnowledge['lastDeclaredCardSwap'] = {'eventNumber':-1,
+                                            'numberOfSwapperI':None,
+                                            'numberOfSwapperII':None},
   # A prior beliefs array is an identity matrix
   # - we have full knowledge about who got which card
   beliefsPrior = np.identity(numberOfPlayers)
   # Every player gets their own private beliefs array
   playersBeliefs = [[beliefsPrior] for k in range(numberOfActivePlayers)]
-  privateKnowledge = [{'performedCardSwap':{'eventNumber':-1,
-                                            'numberOfSwapperI':None,
-                                            'numberOfSwapperII':None},
-                       'lookAtMyCard':{'eventNumber':-1,
-                                       'myCharacter':None}} \
+  playersMemories = [[] for k in range(numberOfActivePlayers)]
+  privateKnowledge = [{'myLastPerformedCardSwap':{'eventNumber':-1,
+                                                  'numberOfSwapperI':None,
+                                                  'numberOfSwapperII':None},
+                       'lastLookAtMyCard':{'eventNumber':-1,
+                                           'character':None}} \
                        for k in range(numberOfActivePlayers)]
   numberOfTurnsForSwapOnly = 4 # according to the rules
   # Counters' initialization
@@ -190,7 +194,12 @@ def MascaradeTournament(players, numberOfGames):
           # Current player makes a move
           playerMove = globals()[players[currentPlayer]](
           currentPlayer, publicKnowledge, privateKnowledge[currentPlayer],
-          playersBeliefs[currentPlayer], actionMode, eventNumber)
+          playersBeliefs[currentPlayer], playersMemories[currentPlayer],
+          actionMode, eventNumber)
+          # Updating private knowledge, beliefs and memories of the current player
+          privateKnowledge[currentPlayer] = playerMove['privateKnowledge']
+          playersBeliefs[currentPlayer] = playerMove['myBeliefs']
+          playersMemories[currentPlayer] = playerMove['myMemories']
           
           # If player decides to swap their card – or not (under the table):
           if playerMove['actionType'] == 'Swap my card':
@@ -200,13 +209,13 @@ def MascaradeTournament(players, numberOfGames):
               if playerMove['actionTrue'] == True:
                   charactersInPlay = SwapCards(charactersInPlay,
                                                currentPlayer, swapTarget)
-                  privateKnowledge[currentPlayer]['performedCardSwap'] = \
+                  privateKnowledge[currentPlayer]['myLastPerformedCardSwap'] = \
                   {'eventNumber':eventNumber,
                   'numberOfSwapperI':currentPlayer,
                   'numberOfSwapperII':swapTarget}
           # If player decides to secretly look at their card:
           if playerMove['actionType'] == 'Look at my card':
-              privateKnowledge[currentPlayer]['lookAtMyCard'] = \
+              privateKnowledge[currentPlayer]['lastLookAtMyCard'] = \
                   {'eventNumber':eventNumber,
                   'myCharacter':charactersInPlay[currentPlayer]}
               playersBeliefs[currentPlayer] = UpdateBeliefsOnCharacterReveal(
@@ -249,12 +258,9 @@ for i in range(5):
     print(np.sum(b2[:,i]))
     print(np.sum(b2[i,:]))
     
-
-
     
-
 def BotDraft(myPlayerNumber, publicKnowledge, privateKnowledge, myBeliefs,
-         actionMode, eventNumber):
+         myMemories, actionMode, eventNumber):
     """
     actionModes = ('Regular', 'Swap only', 'Challenge the announcer')
     actionTypes = ('Swap my card', 'Look at my card', 'Announce my character')
@@ -264,22 +270,22 @@ def BotDraft(myPlayerNumber, publicKnowledge, privateKnowledge, myBeliefs,
     or challenge the announcer)
     """
     # Updating beliefs
-    if privateKnowledge['lookAtMyCard']['eventNumber'] == (eventNumber - 1):
-        myRevealedCharacter = privateKnowledge['lookAtMyCard']['myCharacter']
+    if privateKnowledge['lastLookAtMyCard']['eventNumber'] == (eventNumber - 1):
+        myRevealedCharacter = privateKnowledge['lastLookAtMyCard']['character']
         myBeliefs = UpdateBeliefsOnCharacterReveal(myBeliefs, 
                     myPlayerNumber, myRevealedCharacter, 
                     publicKnowledge['startingAssignmentOfCharacters'])
-    if privateKnowledge['performedCardSwap']['eventNumber'] == (eventNumber - 1):
-        numberOfSwapperI = privateKnowledge['performedCardSwap']['numberOfSwapperI']
-        numberOfSwapperII = privateKnowledge['performedCardSwap']['numberOfSwapperII']
+    if privateKnowledge['myLastPerformedCardSwap']['eventNumber'] == (eventNumber - 1):
+        numberOfSwapperI = privateKnowledge['myLastPerformedCardSwap']['numberOfSwapperI']
+        numberOfSwapperII = privateKnowledge['myLastPerformedCardSwap']['numberOfSwapperII']
         myBeliefs = UpdateBeliefsOnCardSwap(myBeliefs, 
-                    numberOfSwapperI, numberOfSwapperII, 1):
+                    numberOfSwapperI, numberOfSwapperII, 1)
     # Action
     if actionMode == 'Challenge the announcer':
        # in this case, only the value of actionTrue is used
        actionTrue = False
        return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs,
-               'actionTrue':actionTrue}
+               'myMemories':myMemories, 'actionTrue':actionTrue}
     if actionMode == 'Swap only':
        # in this case, only the values of actionArgument and actionTrue
        # are used; actionArgument should be the number of player 
@@ -291,7 +297,8 @@ def BotDraft(myPlayerNumber, publicKnowledge, privateKnowledge, myBeliefs,
                                         publicKnowledge['numberOfActivePlayers'])
        actionTrue = False
        return {'privateKnowledge':privateKnowledge,'myBeliefs':myBeliefs,
-               'actionArgument':actionArgument, 'actionTrue':actionTrue}
+               'myMemories':myMemories, 'actionArgument':actionArgument,
+               'actionTrue':actionTrue}
     if actionMode == 'Regular':
        
        # If player decides to swap their card – or not (under the table):
@@ -300,14 +307,14 @@ def BotDraft(myPlayerNumber, publicKnowledge, privateKnowledge, myBeliefs,
                                         publicKnowledge['numberOfActivePlayers'])
        actionTrue = False
        return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs,
-               'actionType':actionType, actionArgument':actionArgument, 
-               'actionTrue':actionTrue}
+               'myMemories':myMemories, 'actionType':actionType,
+               'actionArgument':actionArgument, 'actionTrue':actionTrue}
                
        # If player decides to secretly look at their card:
        actionType = 'Look at my card'
        ## actionArgument and actionTrue are not used in this case
        return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs,
-               'actionType':actionType}
+               'myMemories':myMemories, 'actionType':actionType}
   
        # If player decides to announce their character:
        actionType = 'Announce my character'
@@ -316,7 +323,8 @@ def BotDraft(myPlayerNumber, publicKnowledge, privateKnowledge, myBeliefs,
        ## the tournament environment will choose one randomly
        ## actionTrue is not used in this case
        return {'privateKnowledge':privateKnowledge, 'myBeliefs':myBeliefs, 
-               'actionType':actionType, 'actionArgument':actionArgument}
+               'myMemories':myMemories, 'actionType':actionType, 
+               'actionArgument':actionArgument}
     return {None}
    
 def UpdatepublicKnowledge(publicKnowledge, action):
